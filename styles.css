@@ -511,6 +511,35 @@ button:focus-visible {
   font-size: var(--text-base);
   opacity: 0.92;
 }
+.hero-countdown {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-sm);
+  opacity: 0.92;
+}
+.hero-countdown[hidden] {
+  display: none;
+}
+.hero-countdown .countdown-num {
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-extra);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  letter-spacing: var(--tracking-tighter);
+}
+.hero-countdown .countdown-desc {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  opacity: 0.9;
+}
+.hero-countdown.is-today .countdown-num {
+  color: #fef08a;
+}
+.hero-countdown.is-overdue .countdown-num {
+  opacity: 0.75;
+}
 
 .ring-wrap {
   position: relative;

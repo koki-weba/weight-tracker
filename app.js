@@ -135,6 +135,13 @@
     const start = startOfWeek(date);
     return Array.from({ length: 7 }, (_, i) => formatDate(addDays(start, i)));
   }
+  function daysUntil(dateStr) {
+    if (!dateStr) return null;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const target = new Date(dateStr + "T00:00:00");
+    return Math.round((target - today) / 86400000);
+  }
 
   // -----------------------------
   // ストア
@@ -349,6 +356,28 @@
       $("#goalProgressSub").textContent = state.settings.targetWeight == null
         ? "設定タブから目標体重を設定してください"
         : "体重を記録すると達成度が表示されます";
+    }
+
+    const countdownEl = $("#goalCountdown");
+    const targetDate = state.settings.targetDate;
+    const daysLeft = daysUntil(targetDate);
+    if (targetDate && daysLeft != null) {
+      const dateLabel = formatJpDate(targetDate);
+      countdownEl.hidden = false;
+      countdownEl.classList.toggle("is-overdue", daysLeft < 0);
+      countdownEl.classList.toggle("is-today", daysLeft === 0);
+      if (daysLeft > 0) {
+        $("#goalCountdownNum").textContent = daysLeft;
+        $("#goalCountdownDesc").textContent = `日（${dateLabel}まで）`;
+      } else if (daysLeft === 0) {
+        $("#goalCountdownNum").textContent = "0";
+        $("#goalCountdownDesc").textContent = `日 — 今日が目標日（${dateLabel}）`;
+      } else {
+        $("#goalCountdownNum").textContent = Math.abs(daysLeft);
+        $("#goalCountdownDesc").textContent = `日経過（${dateLabel}）`;
+      }
+    } else {
+      countdownEl.hidden = true;
     }
 
     renderWeekCalories();
