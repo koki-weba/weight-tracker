@@ -709,32 +709,6 @@
       .join("");
   }
 
-  function renderExerciseList() {
-    const list = $("#exerciseList");
-    if (!list) return;
-    if (!state.exercises.length) {
-      list.innerHTML = `<p class="hint">種目がありません。下のフォームから登録してください。</p>`;
-      return;
-    }
-    list.innerHTML = state.exercises
-      .map((ex) => {
-        const pr = getPR(ex.id);
-        const prText =
-          pr.maxWeight != null
-            ? `PR ${pr.maxWeight} kg`
-            : "PR 未記録";
-        return `<div class="exercise-item" data-id="${ex.id}">
-          <div class="exercise-meta">
-            <strong>${escapeHtml(ex.name)}</strong>
-            <span class="muscle-tag">${MUSCLE_LABELS[ex.muscle] || "その他"}</span>
-            <span class="pr-chip">${prText}</span>
-          </div>
-          <button type="button" class="btn-icon danger" data-del-ex="${ex.id}" aria-label="削除">×</button>
-        </div>`;
-      })
-      .join("");
-  }
-
   function escapeHtml(s) {
     return String(s)
       .replace(/&/g, "&amp;")
@@ -743,15 +717,62 @@
       .replace(/"/g, "&quot;");
   }
 
+  function formatSetsSummary(sets) {
+    if (!sets?.length) return "記録なし";
+    return sets
+      .map((s, i) => `<span class="last-set-pill"><b>${i + 1}</b>${s.weight}<small>kg</small>×${s.reps}<small>回</small></span>`)
+      .join("");
+  }
+
+  function renderLastPreviewHtml(last, opts = {}) {
+    const { compact = false } = opts;
+    if (!last) {
+      return `<div class="last-preview-inner is-empty">
+        <span class="last-preview-label">前回</span>
+        <p>まだこの種目の記録がありません</p>
+      </div>`;
+    }
+    const vol = last.sets.reduce((s, set) => s + setVolume(set), 0);
+    return `<div class="last-preview-inner">
+      <div class="last-preview-top">
+        <span class="last-preview-label">前回 · ${formatJpDate(last.date)}</span>
+        ${compact ? "" : `<span class="last-preview-vol">${Math.round(vol).toLocaleString()} kg</span>`}
+      </div>
+      <div class="last-set-pills">${formatSetsSummary(last.sets)}</div>
+    </div>`;
+  }
+
+  function updateTrainLastPreview() {
+    const box = $("#trainLastPreview");
+    const sel = $("#trainAddExercise");
+    if (!box || !sel || !trainDraft) return;
+    const id = sel.value;
+    if (!id || sel.disabled) {
+      box.hidden = true;
+      box.innerHTML = "";
+      return;
+    }
+    const last = getLastEntrySets(id, trainDraft.date);
+    const pr = getPR(id);
+    box.hidden = false;
+    box.innerHTML = `${renderLastPreviewHtml(last)}
+      <div class="last-preview-pr">
+        <span>自己ベスト重量 <strong>${pr.maxWeight != null ? pr.maxWeight + " kg" : "--"}</strong></span>
+        <span>自己ベスト1RM <strong>${pr.max1RM != null ? pr.max1RM + " kg" : "--"}</strong></span>
+      </div>`;
+  }
+
   function fillTrainAddSelect() {
     const sel = $("#trainAddExercise");
     if (!sel || !trainDraft) return;
     const used = new Set(trainDraft.entries.map((e) => e.exerciseId));
     const available = state.exercises.filter((e) => !used.has(e.id));
+    const prev = sel.value;
     if (!available.length) {
       sel.innerHTML = `<option value="">追加できる種目がありません</option>`;
       sel.disabled = true;
       $("#trainAddEntryBtn").disabled = true;
+      updateTrainLastPreview();
       return;
     }
     sel.disabled = false;
@@ -762,6 +783,41 @@
           `<option value="${e.id}">${escapeHtml(e.name)}（${MUSCLE_LABELS[e.muscle] || "その他"}）</option>`
       )
       .join("");
+    if (prev && available.some((e) => e.id === prev)) sel.value = prev;
+    updateTrainLastPreview();
+  }
+
+  function renderExerciseList() {
+    const list = $("#exerciseList");
+    if (!list) return;
+    if (!state.exercises.length) {
+      list.innerHTML = `<p class="hint">種目がありません。下のフォームから登録してください。</p>`;
+      return;
+    }
+    list.innerHTML = state.exercises
+      .map((ex) => {
+        const pr = getPR(ex.id);
+        const last = trainDraft
+          ? getLastEntrySets(ex.id, trainDraft.date)
+          : getLastEntrySets(ex.id, todayStr());
+        const lastLine = last
+          ? `前回 ${formatJpDate(last.date)} · ${last.sets.map((s) => `${s.weight}×${s.reps}`).join(" / ")}`
+          : "前回なし";
+        return `<div class="exercise-item" data-id="${ex.id}">
+          <div class="exercise-meta">
+            <div class="exercise-title-row">
+              <strong>${escapeHtml(ex.name)}</strong>
+              <span class="muscle-tag">${MUSCLE_LABELS[ex.muscle] || "その他"}</span>
+            </div>
+            <div class="exercise-sub">${escapeHtml(lastLine)}</div>
+            <div class="exercise-pr-row">
+              <span class="pr-chip">PR ${pr.maxWeight != null ? pr.maxWeight + " kg" : "未記録"}</span>
+            </div>
+          </div>
+          <button type="button" class="btn-icon danger" data-del-ex="${ex.id}" aria-label="削除">×</button>
+        </div>`;
+      })
+      .join("");
   }
 
   function renderTrainEntries() {
@@ -769,7 +825,7 @@
     const hint = $("#trainEmptyHint");
     if (!box || !trainDraft) return;
     const vol = workoutVolume(trainDraft);
-    $("#trainVolumeBadge").textContent = `${Math.round(vol).toLocaleString()} kg`;
+    $("#trainVolumeBadge").textContent = `総負荷 ${Math.round(vol).toLocaleString()} kg`;
 
     if (!trainDraft.entries.length) {
       box.innerHTML = "";
@@ -782,6 +838,7 @@
       .map((entry, ei) => {
         const ex = getExercise(entry.exerciseId);
         const name = ex ? ex.name : "不明な種目";
+        const muscle = ex ? MUSCLE_LABELS[ex.muscle] || "その他" : "";
         const pr = getPR(entry.exerciseId);
         const bestRm = entryBest1RM(entry);
         const last = getLastEntrySets(entry.exerciseId, trainDraft.date);
@@ -789,34 +846,50 @@
           .map(
             (set, si) => `<div class="set-row" data-ei="${ei}" data-si="${si}">
               <span class="set-num">${si + 1}</span>
-              <input type="number" inputmode="decimal" step="0.5" class="set-weight" value="${set.weight}" placeholder="重量" aria-label="重量" />
-              <span class="set-unit">kg</span>
-              <span class="set-x">×</span>
-              <input type="number" inputmode="numeric" class="set-reps" value="${set.reps}" placeholder="回" aria-label="回数" />
-              <span class="set-unit">回</span>
+              <label class="set-field">
+                <span class="set-field-label">重量</span>
+                <div class="set-field-input">
+                  <input type="number" inputmode="decimal" step="0.5" class="set-weight" value="${set.weight}" placeholder="0" aria-label="重量" />
+                  <span>kg</span>
+                </div>
+              </label>
+              <span class="set-x" aria-hidden="true">×</span>
+              <label class="set-field">
+                <span class="set-field-label">回数</span>
+                <div class="set-field-input">
+                  <input type="number" inputmode="numeric" class="set-reps" value="${set.reps}" placeholder="0" aria-label="回数" />
+                  <span>回</span>
+                </div>
+              </label>
               <button type="button" class="btn-icon" data-del-set="${ei}:${si}" aria-label="セット削除">×</button>
             </div>`
           )
           .join("");
-        return `<div class="train-entry" data-ei="${ei}">
-          <div class="train-entry-head">
-            <div>
+        return `<article class="train-entry" data-ei="${ei}">
+          <header class="train-entry-head">
+            <div class="train-entry-title">
               <strong>${escapeHtml(name)}</strong>
-              <div class="train-entry-stats">
-                <span>PR ${pr.maxWeight != null ? pr.maxWeight + " kg" : "--"}</span>
-                <span>推定1RM ${bestRm != null ? bestRm + " kg" : "--"}</span>
-              </div>
+              ${muscle ? `<span class="muscle-tag">${muscle}</span>` : ""}
             </div>
             <button type="button" class="btn-icon danger" data-del-entry="${ei}" aria-label="種目を外す">×</button>
+          </header>
+          <div class="train-entry-stats">
+            <div class="stat-pill"><span>PR</span><strong>${pr.maxWeight != null ? pr.maxWeight + " kg" : "--"}</strong></div>
+            <div class="stat-pill"><span>推定1RM</span><strong>${bestRm != null ? bestRm + " kg" : "--"}</strong></div>
+            <div class="stat-pill"><span>負荷</span><strong>${Math.round(entryVolume(entry)).toLocaleString()} kg</strong></div>
           </div>
-          <div class="set-list">${setsHtml || `<p class="hint">セットがありません</p>`}</div>
-          <div class="train-entry-actions">
-            <button type="button" class="btn btn-ghost btn-sm" data-add-set="${ei}">セット追加</button>
-            <button type="button" class="btn btn-ghost btn-sm" data-copy-last="${ei}" ${last ? "" : "disabled"}>
-              前回をコピー${last ? `（${formatJpDate(last.date)}）` : ""}
+          <div class="entry-last-block">
+            ${renderLastPreviewHtml(last, { compact: true })}
+            <button type="button" class="btn btn-secondary btn-sm" data-copy-last="${ei}" ${last ? "" : "disabled"}>
+              前回の内容をコピー
             </button>
           </div>
-        </div>`;
+          <div class="set-section">
+            <div class="set-section-label">今回のセット</div>
+            <div class="set-list">${setsHtml || `<p class="hint">セットがありません</p>`}</div>
+            <button type="button" class="btn btn-ghost btn-sm btn-add-set" data-add-set="${ei}">＋ セットを追加</button>
+          </div>
+        </article>`;
       })
       .join("");
   }
@@ -858,6 +931,8 @@
       renderTrainView();
     });
 
+    $("#trainAddExercise").addEventListener("change", () => updateTrainLastPreview());
+
     $("#trainAddEntryBtn").addEventListener("click", () => {
       syncDraftFromDom();
       const id = $("#trainAddExercise").value;
@@ -877,6 +952,7 @@
           : [{ weight: 0, reps: 10 }],
       });
       renderTrainView();
+      if (last) toast(`${formatJpDate(last.date)}の内容を初期値にしました`);
     });
 
     $("#trainEntries").addEventListener("click", (e) => {
@@ -931,17 +1007,18 @@
       if (e.target.matches(".set-weight, .set-reps")) {
         syncDraftFromDom();
         const vol = workoutVolume(trainDraft);
-        $("#trainVolumeBadge").textContent = `${Math.round(vol).toLocaleString()} kg`;
-        // 1RM表示更新のため部分再描画は重いのでバッジのみ
+        $("#trainVolumeBadge").textContent = `総負荷 ${Math.round(vol).toLocaleString()} kg`;
         $$("#trainEntries .train-entry").forEach((card, ei) => {
           const entry = trainDraft.entries[ei];
           if (!entry) return;
           const bestRm = entryBest1RM(entry);
+          const pr = getPR(entry.exerciseId);
           const stats = card.querySelector(".train-entry-stats");
           if (!stats) return;
-          const pr = getPR(entry.exerciseId);
-          stats.innerHTML = `<span>PR ${pr.maxWeight != null ? pr.maxWeight + " kg" : "--"}</span>
-            <span>推定1RM ${bestRm != null ? bestRm + " kg" : "--"}</span>`;
+          stats.innerHTML = `
+            <div class="stat-pill"><span>PR</span><strong>${pr.maxWeight != null ? pr.maxWeight + " kg" : "--"}</strong></div>
+            <div class="stat-pill"><span>推定1RM</span><strong>${bestRm != null ? bestRm + " kg" : "--"}</strong></div>
+            <div class="stat-pill"><span>負荷</span><strong>${Math.round(entryVolume(entry)).toLocaleString()} kg</strong></div>`;
         });
       }
     });
@@ -949,7 +1026,6 @@
     $("#saveWorkoutBtn").addEventListener("click", () => {
       syncDraftFromDom();
       const date = trainDraft.date;
-      // 無効セット除去
       trainDraft.entries = trainDraft.entries
         .map((e) => ({
           exerciseId: e.exerciseId,

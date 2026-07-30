@@ -199,31 +199,36 @@
 
     <!-- 筋トレ画面 -->
     <section class="view view-train" data-view="train">
-      <div class="card">
+      <div class="card train-date-card">
         <div class="card-head">
-          <h3>日付選択</h3>
+          <h3>トレーニング日</h3>
+          <span class="badge" id="trainVolumeBadge">総負荷 0 kg</span>
         </div>
         <input type="date" id="trainDate" class="date-input" />
       </div>
 
-      <div class="card">
+      <div class="card train-session-card">
         <div class="card-head">
-          <h3>この日のトレーニング</h3>
-          <span class="badge" id="trainVolumeBadge">0 kg</span>
+          <h3>種目を追加</h3>
         </div>
-        <div id="trainEntries" class="train-entries"></div>
-        <p class="hint" id="trainEmptyHint">種目を追加してセットを記録しましょう</p>
-        <div class="train-add-row">
-          <label class="field grow">
-            <span>種目を追加</span>
-            <select id="trainAddExercise"></select>
-          </label>
-          <button type="button" class="btn btn-secondary" id="trainAddEntryBtn">追加</button>
-        </div>
-        <button type="button" class="btn btn-primary btn-block" id="saveWorkoutBtn">トレーニングを保存</button>
+        <label class="field">
+          <span>種目を選ぶ</span>
+          <select id="trainAddExercise"></select>
+        </label>
+        <div class="last-preview" id="trainLastPreview" hidden></div>
+        <button type="button" class="btn btn-primary btn-block" id="trainAddEntryBtn">この種目を追加</button>
       </div>
 
       <div class="card">
+        <div class="card-head">
+          <h3>本日のメニュー</h3>
+        </div>
+        <div id="trainEntries" class="train-entries"></div>
+        <p class="hint train-empty" id="trainEmptyHint">上から種目を選んで追加すると、ここにセット入力が表示されます</p>
+        <button type="button" class="btn btn-primary btn-block" id="saveWorkoutBtn">トレーニングを保存</button>
+      </div>
+
+      <div class="card train-catalog-card">
         <div class="card-head">
           <h3>種目マスタ</h3>
         </div>
@@ -421,7 +426,7 @@
 
   <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-  <script src="app.js?v=10"></script>
+  <script src="app.js?v=11"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(()=>{}));
