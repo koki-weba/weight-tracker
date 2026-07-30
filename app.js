@@ -20,7 +20,28 @@
       dailyCalGoal: 2000,
     },
     records: {}, // { 'YYYY-MM-DD': { weight, dailyCalories } }
+    exercises: [], // [{ id, name, muscle }]
+    workouts: [], // [{ id, date, entries: [{ exerciseId, sets: [{ weight, reps }] }] }]
   };
+
+  const MUSCLE_LABELS = {
+    chest: "胸",
+    back: "背中",
+    legs: "脚",
+    shoulders: "肩",
+    arms: "腕",
+    core: "体幹",
+    other: "その他",
+  };
+
+  const SEED_EXERCISES = [
+    { id: "ex_bench", name: "ベンチプレス", muscle: "chest" },
+    { id: "ex_squat", name: "スクワット", muscle: "legs" },
+    { id: "ex_deadlift", name: "デッドリフト", muscle: "back" },
+    { id: "ex_ohp", name: "ショルダープレス", muscle: "shoulders" },
+    { id: "ex_row", name: "ベントオーバーロウ", muscle: "back" },
+    { id: "ex_curl", name: "アームカール", muscle: "arms" },
+  ];
 
   const WEEKLY_AVG_MIN_RANGE = 30;
 
@@ -169,18 +190,85 @@
     return out;
   }
 
+  function uid(prefix = "id") {
+    return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  function normalizeExercise(ex) {
+    if (!ex || !ex.name) return null;
+    const muscle = MUSCLE_LABELS[ex.muscle] ? ex.muscle : "other";
+    return {
+      id: ex.id || uid("ex"),
+      name: String(ex.name).trim().slice(0, 40),
+      muscle,
+    };
+  }
+
+  function normalizeExercises(list) {
+    const out = [];
+    const seen = new Set();
+    for (const ex of list || []) {
+      const n = normalizeExercise(ex);
+      if (!n || seen.has(n.id)) continue;
+      seen.add(n.id);
+      out.push(n);
+    }
+    return out;
+  }
+
+  function normalizeSet(set) {
+    if (!set) return null;
+    const weight = Number(set.weight);
+    const reps = parseInt(set.reps, 10);
+    if (isNaN(weight) || weight < 0 || isNaN(reps) || reps <= 0) return null;
+    return { weight: +weight.toFixed(1), reps };
+  }
+
+  function normalizeWorkout(w) {
+    if (!w || !w.date) return null;
+    const entries = [];
+    for (const entry of w.entries || []) {
+      if (!entry?.exerciseId) continue;
+      const sets = (entry.sets || []).map(normalizeSet).filter(Boolean);
+      entries.push({ exerciseId: entry.exerciseId, sets });
+    }
+    return {
+      id: w.id || uid("wo"),
+      date: w.date,
+      note: w.note ? String(w.note).slice(0, 200) : "",
+      entries,
+    };
+  }
+
+  function normalizeWorkouts(list) {
+    return (list || []).map(normalizeWorkout).filter(Boolean);
+  }
+
+  function hydrateState(parsed) {
+    let exercises = normalizeExercises(parsed.exercises);
+    if (!exercises.length) exercises = structuredClone(SEED_EXERCISES);
+    return {
+      settings: { ...DEFAULT_DATA.settings, ...(parsed.settings || {}) },
+      records: normalizeRecords(parsed.records),
+      exercises,
+      workouts: normalizeWorkouts(parsed.workouts),
+    };
+  }
+
   function loadData() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return structuredClone(DEFAULT_DATA);
-      const parsed = JSON.parse(raw);
-      return {
-        settings: { ...DEFAULT_DATA.settings, ...(parsed.settings || {}) },
-        records: normalizeRecords(parsed.records),
-      };
+      if (!raw) {
+        const data = structuredClone(DEFAULT_DATA);
+        data.exercises = structuredClone(SEED_EXERCISES);
+        return data;
+      }
+      return hydrateState(JSON.parse(raw));
     } catch (e) {
       console.warn("data load error", e);
-      return structuredClone(DEFAULT_DATA);
+      const data = structuredClone(DEFAULT_DATA);
+      data.exercises = structuredClone(SEED_EXERCISES);
+      return data;
     }
   }
   function saveData() {
@@ -232,6 +320,7 @@
   const PAGE_TITLES = {
     home: { title: "ホーム", subtitle: "今日の状態を確認しましょう" },
     record: { title: "記録", subtitle: "体重と摂取カロリーを記録しましょう" },
+    train: { title: "筋トレ", subtitle: "種目・重量・回数を記録しましょう" },
     graph: { title: "グラフ", subtitle: "推移を可視化して確認" },
     settings: { title: "設定", subtitle: "目標と身体情報の設定" },
   };
@@ -261,6 +350,7 @@
     }
     window.scrollTo({ top: 0, behavior: prefersReducedMotion() ? "auto" : "smooth" });
     if (target === "graph") setTimeout(updateCharts, 80);
+    if (target === "train") renderTrainView();
   }
 
   // -----------------------------
@@ -499,6 +589,440 @@
   }
 
   // -----------------------------
+  // 筋トレヘルパ
+  // -----------------------------
+  function getExercise(id) {
+    return state.exercises.find((e) => e.id === id) || null;
+  }
+
+  function estimate1RM(weight, reps) {
+    const w = Number(weight);
+    const r = parseInt(reps, 10);
+    if (isNaN(w) || w <= 0 || isNaN(r) || r <= 0) return null;
+    if (r === 1) return +w.toFixed(1);
+    // Epley: w * (1 + r/30)
+    return +((w * (1 + r / 30))).toFixed(1);
+  }
+
+  function setVolume(set) {
+    return (Number(set.weight) || 0) * (Number(set.reps) || 0);
+  }
+
+  function entryVolume(entry) {
+    return (entry.sets || []).reduce((s, set) => s + setVolume(set), 0);
+  }
+
+  function workoutVolume(workout) {
+    if (!workout) return 0;
+    return (workout.entries || []).reduce((s, e) => s + entryVolume(e), 0);
+  }
+
+  function getWorkoutByDate(date) {
+    return state.workouts.find((w) => w.date === date) || null;
+  }
+
+  function entryMaxWeight(entry) {
+    let max = null;
+    for (const set of entry.sets || []) {
+      const w = Number(set.weight);
+      if (isNaN(w)) continue;
+      if (max == null || w > max) max = w;
+    }
+    return max;
+  }
+
+  function entryBest1RM(entry) {
+    let best = null;
+    for (const set of entry.sets || []) {
+      const rm = estimate1RM(set.weight, set.reps);
+      if (rm == null) continue;
+      if (best == null || rm > best) best = rm;
+    }
+    return best;
+  }
+
+  /** 種目の最高記録: 最大重量・推定1RM */
+  function getPR(exerciseId) {
+    let maxWeight = null;
+    let maxWeightDate = null;
+    let max1RM = null;
+    let max1RMDate = null;
+    for (const w of state.workouts) {
+      for (const entry of w.entries || []) {
+        if (entry.exerciseId !== exerciseId) continue;
+        const mw = entryMaxWeight(entry);
+        if (mw != null && (maxWeight == null || mw > maxWeight)) {
+          maxWeight = mw;
+          maxWeightDate = w.date;
+        }
+        const rm = entryBest1RM(entry);
+        if (rm != null && (max1RM == null || rm > max1RM)) {
+          max1RM = rm;
+          max1RMDate = w.date;
+        }
+      }
+    }
+    return { maxWeight, maxWeightDate, max1RM, max1RMDate };
+  }
+
+  /** 指定日より前の直近セット */
+  function getLastEntrySets(exerciseId, beforeDate) {
+    const sorted = [...state.workouts]
+      .filter((w) => w.date < beforeDate)
+      .sort((a, b) => (a.date < b.date ? 1 : -1));
+    for (const w of sorted) {
+      const entry = (w.entries || []).find((e) => e.exerciseId === exerciseId);
+      if (entry && entry.sets?.length) {
+        return {
+          date: w.date,
+          sets: entry.sets.map((s) => ({ weight: s.weight, reps: s.reps })),
+        };
+      }
+    }
+    return null;
+  }
+
+  // 編集中ドラフト（保存前）
+  let trainDraft = null;
+
+  function loadTrainDraft(date) {
+    const existing = getWorkoutByDate(date);
+    if (existing) {
+      trainDraft = {
+        id: existing.id,
+        date,
+        note: existing.note || "",
+        entries: existing.entries.map((e) => ({
+          exerciseId: e.exerciseId,
+          sets: e.sets.map((s) => ({ weight: s.weight, reps: s.reps })),
+        })),
+      };
+    } else {
+      trainDraft = { id: uid("wo"), date, note: "", entries: [] };
+    }
+  }
+
+  function fillMuscleSelect(sel) {
+    if (!sel) return;
+    sel.innerHTML = Object.entries(MUSCLE_LABELS)
+      .map(([k, v]) => `<option value="${k}">${v}</option>`)
+      .join("");
+  }
+
+  function renderExerciseList() {
+    const list = $("#exerciseList");
+    if (!list) return;
+    if (!state.exercises.length) {
+      list.innerHTML = `<p class="hint">種目がありません。下のフォームから登録してください。</p>`;
+      return;
+    }
+    list.innerHTML = state.exercises
+      .map((ex) => {
+        const pr = getPR(ex.id);
+        const prText =
+          pr.maxWeight != null
+            ? `PR ${pr.maxWeight} kg`
+            : "PR 未記録";
+        return `<div class="exercise-item" data-id="${ex.id}">
+          <div class="exercise-meta">
+            <strong>${escapeHtml(ex.name)}</strong>
+            <span class="muscle-tag">${MUSCLE_LABELS[ex.muscle] || "その他"}</span>
+            <span class="pr-chip">${prText}</span>
+          </div>
+          <button type="button" class="btn-icon danger" data-del-ex="${ex.id}" aria-label="削除">×</button>
+        </div>`;
+      })
+      .join("");
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function fillTrainAddSelect() {
+    const sel = $("#trainAddExercise");
+    if (!sel || !trainDraft) return;
+    const used = new Set(trainDraft.entries.map((e) => e.exerciseId));
+    const available = state.exercises.filter((e) => !used.has(e.id));
+    if (!available.length) {
+      sel.innerHTML = `<option value="">追加できる種目がありません</option>`;
+      sel.disabled = true;
+      $("#trainAddEntryBtn").disabled = true;
+      return;
+    }
+    sel.disabled = false;
+    $("#trainAddEntryBtn").disabled = false;
+    sel.innerHTML = available
+      .map(
+        (e) =>
+          `<option value="${e.id}">${escapeHtml(e.name)}（${MUSCLE_LABELS[e.muscle] || "その他"}）</option>`
+      )
+      .join("");
+  }
+
+  function renderTrainEntries() {
+    const box = $("#trainEntries");
+    const hint = $("#trainEmptyHint");
+    if (!box || !trainDraft) return;
+    const vol = workoutVolume(trainDraft);
+    $("#trainVolumeBadge").textContent = `${Math.round(vol).toLocaleString()} kg`;
+
+    if (!trainDraft.entries.length) {
+      box.innerHTML = "";
+      if (hint) hint.hidden = false;
+      return;
+    }
+    if (hint) hint.hidden = true;
+
+    box.innerHTML = trainDraft.entries
+      .map((entry, ei) => {
+        const ex = getExercise(entry.exerciseId);
+        const name = ex ? ex.name : "不明な種目";
+        const pr = getPR(entry.exerciseId);
+        const bestRm = entryBest1RM(entry);
+        const last = getLastEntrySets(entry.exerciseId, trainDraft.date);
+        const setsHtml = (entry.sets || [])
+          .map(
+            (set, si) => `<div class="set-row" data-ei="${ei}" data-si="${si}">
+              <span class="set-num">${si + 1}</span>
+              <input type="number" inputmode="decimal" step="0.5" class="set-weight" value="${set.weight}" placeholder="重量" aria-label="重量" />
+              <span class="set-unit">kg</span>
+              <span class="set-x">×</span>
+              <input type="number" inputmode="numeric" class="set-reps" value="${set.reps}" placeholder="回" aria-label="回数" />
+              <span class="set-unit">回</span>
+              <button type="button" class="btn-icon" data-del-set="${ei}:${si}" aria-label="セット削除">×</button>
+            </div>`
+          )
+          .join("");
+        return `<div class="train-entry" data-ei="${ei}">
+          <div class="train-entry-head">
+            <div>
+              <strong>${escapeHtml(name)}</strong>
+              <div class="train-entry-stats">
+                <span>PR ${pr.maxWeight != null ? pr.maxWeight + " kg" : "--"}</span>
+                <span>推定1RM ${bestRm != null ? bestRm + " kg" : "--"}</span>
+              </div>
+            </div>
+            <button type="button" class="btn-icon danger" data-del-entry="${ei}" aria-label="種目を外す">×</button>
+          </div>
+          <div class="set-list">${setsHtml || `<p class="hint">セットがありません</p>`}</div>
+          <div class="train-entry-actions">
+            <button type="button" class="btn btn-ghost btn-sm" data-add-set="${ei}">セット追加</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-copy-last="${ei}" ${last ? "" : "disabled"}>
+              前回をコピー${last ? `（${formatJpDate(last.date)}）` : ""}
+            </button>
+          </div>
+        </div>`;
+      })
+      .join("");
+  }
+
+  function syncDraftFromDom() {
+    if (!trainDraft) return;
+    $$("#trainEntries .set-row").forEach((row) => {
+      const ei = parseInt(row.dataset.ei, 10);
+      const si = parseInt(row.dataset.si, 10);
+      const entry = trainDraft.entries[ei];
+      if (!entry || !entry.sets[si]) return;
+      const w = parseFloat(row.querySelector(".set-weight").value);
+      const r = parseInt(row.querySelector(".set-reps").value, 10);
+      entry.sets[si].weight = isNaN(w) ? 0 : +w.toFixed(1);
+      entry.sets[si].reps = isNaN(r) ? 0 : r;
+    });
+  }
+
+  function renderTrainView() {
+    const dateInput = $("#trainDate");
+    if (!dateInput) return;
+    const date = dateInput.value || todayStr();
+    if (!dateInput.value) dateInput.value = date;
+    if (!trainDraft || trainDraft.date !== date) loadTrainDraft(date);
+    renderExerciseList();
+    fillTrainAddSelect();
+    renderTrainEntries();
+  }
+
+  function initTrainView() {
+    const dateInput = $("#trainDate");
+    if (!dateInput) return;
+    dateInput.value = todayStr();
+    fillMuscleSelect($("#newExerciseMuscle"));
+
+    dateInput.addEventListener("change", () => {
+      syncDraftFromDom();
+      loadTrainDraft(dateInput.value || todayStr());
+      renderTrainView();
+    });
+
+    $("#trainAddEntryBtn").addEventListener("click", () => {
+      syncDraftFromDom();
+      const id = $("#trainAddExercise").value;
+      if (!id) {
+        toast("追加できる種目がありません");
+        return;
+      }
+      if (trainDraft.entries.some((e) => e.exerciseId === id)) {
+        toast("すでに追加されています");
+        return;
+      }
+      const last = getLastEntrySets(id, trainDraft.date);
+      trainDraft.entries.push({
+        exerciseId: id,
+        sets: last
+          ? last.sets.map((s) => ({ ...s }))
+          : [{ weight: 0, reps: 10 }],
+      });
+      renderTrainView();
+    });
+
+    $("#trainEntries").addEventListener("click", (e) => {
+      const delEntry = e.target.closest("[data-del-entry]");
+      const delSet = e.target.closest("[data-del-set]");
+      const addSet = e.target.closest("[data-add-set]");
+      const copyLast = e.target.closest("[data-copy-last]");
+      if (delEntry) {
+        syncDraftFromDom();
+        const ei = parseInt(delEntry.dataset.delEntry, 10);
+        trainDraft.entries.splice(ei, 1);
+        renderTrainView();
+        return;
+      }
+      if (delSet) {
+        syncDraftFromDom();
+        const [ei, si] = delSet.dataset.delSet.split(":").map(Number);
+        trainDraft.entries[ei]?.sets.splice(si, 1);
+        renderTrainView();
+        return;
+      }
+      if (addSet) {
+        syncDraftFromDom();
+        const ei = parseInt(addSet.dataset.addSet, 10);
+        const entry = trainDraft.entries[ei];
+        if (!entry) return;
+        const prev = entry.sets[entry.sets.length - 1];
+        entry.sets.push({
+          weight: prev ? prev.weight : 0,
+          reps: prev ? prev.reps : 10,
+        });
+        renderTrainView();
+        return;
+      }
+      if (copyLast && !copyLast.disabled) {
+        syncDraftFromDom();
+        const ei = parseInt(copyLast.dataset.copyLast, 10);
+        const entry = trainDraft.entries[ei];
+        if (!entry) return;
+        const last = getLastEntrySets(entry.exerciseId, trainDraft.date);
+        if (!last) {
+          toast("前回の記録がありません");
+          return;
+        }
+        entry.sets = last.sets.map((s) => ({ ...s }));
+        renderTrainView();
+        toast(`${formatJpDate(last.date)}のセットをコピーしました`);
+      }
+    });
+
+    $("#trainEntries").addEventListener("change", (e) => {
+      if (e.target.matches(".set-weight, .set-reps")) {
+        syncDraftFromDom();
+        const vol = workoutVolume(trainDraft);
+        $("#trainVolumeBadge").textContent = `${Math.round(vol).toLocaleString()} kg`;
+        // 1RM表示更新のため部分再描画は重いのでバッジのみ
+        $$("#trainEntries .train-entry").forEach((card, ei) => {
+          const entry = trainDraft.entries[ei];
+          if (!entry) return;
+          const bestRm = entryBest1RM(entry);
+          const stats = card.querySelector(".train-entry-stats");
+          if (!stats) return;
+          const pr = getPR(entry.exerciseId);
+          stats.innerHTML = `<span>PR ${pr.maxWeight != null ? pr.maxWeight + " kg" : "--"}</span>
+            <span>推定1RM ${bestRm != null ? bestRm + " kg" : "--"}</span>`;
+        });
+      }
+    });
+
+    $("#saveWorkoutBtn").addEventListener("click", () => {
+      syncDraftFromDom();
+      const date = trainDraft.date;
+      // 無効セット除去
+      trainDraft.entries = trainDraft.entries
+        .map((e) => ({
+          exerciseId: e.exerciseId,
+          sets: (e.sets || []).map(normalizeSet).filter(Boolean),
+        }))
+        .filter((e) => e.sets.length > 0);
+
+      const idx = state.workouts.findIndex((w) => w.date === date);
+      if (!trainDraft.entries.length) {
+        if (idx >= 0) state.workouts.splice(idx, 1);
+        saveData();
+        loadTrainDraft(date);
+        renderTrainView();
+        fillChartExerciseSelect();
+        toast("セットがないため記録を削除しました");
+        return;
+      }
+
+      const saved = normalizeWorkout(trainDraft);
+      if (idx >= 0) state.workouts[idx] = saved;
+      else state.workouts.push(saved);
+      state.workouts.sort((a, b) => (a.date < b.date ? -1 : 1));
+      saveData();
+      loadTrainDraft(date);
+      renderTrainView();
+      fillChartExerciseSelect();
+      toast(`${formatJpDate(date)}のトレーニングを保存しました`);
+    });
+
+    $("#addExerciseBtn").addEventListener("click", () => {
+      const name = ($("#newExerciseName").value || "").trim();
+      const muscle = $("#newExerciseMuscle").value || "other";
+      if (!name) {
+        toast("種目名を入力してください");
+        return;
+      }
+      if (state.exercises.some((e) => e.name === name)) {
+        toast("同名の種目があります");
+        return;
+      }
+      state.exercises.push(normalizeExercise({ name, muscle }));
+      saveData();
+      $("#newExerciseName").value = "";
+      renderTrainView();
+      fillChartExerciseSelect();
+      toast(`「${name}」を登録しました`);
+    });
+
+    $("#exerciseList").addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-del-ex]");
+      if (!btn) return;
+      const id = btn.dataset.delEx;
+      const ex = getExercise(id);
+      if (!ex) return;
+      const used = state.workouts.some((w) =>
+        (w.entries || []).some((en) => en.exerciseId === id)
+      );
+      const msg = used
+        ? `「${ex.name}」は過去の記録で使われています。削除しますか？（記録内の種目は不明になります）`
+        : `「${ex.name}」を削除しますか？`;
+      if (!confirm(msg)) return;
+      state.exercises = state.exercises.filter((x) => x.id !== id);
+      saveData();
+      if (trainDraft) {
+        trainDraft.entries = trainDraft.entries.filter((en) => en.exerciseId !== id);
+      }
+      renderTrainView();
+      fillChartExerciseSelect();
+      toast("種目を削除しました");
+    });
+  }
+
+  // -----------------------------
   // インポート（マージ）
   // -----------------------------
   function mergeRecords(existing, incoming) {
@@ -655,10 +1179,7 @@
           const data = JSON.parse(ev.target.result);
           if (!data.settings || !data.records) throw new Error("invalid");
           if (!confirm("既存のデータは上書きされます。続行しますか？")) return;
-          state = {
-            settings: { ...DEFAULT_DATA.settings, ...data.settings },
-            records: normalizeRecords(data.records),
-          };
+          state = hydrateState(data);
           saveData();
           renderAll();
           fillSettingsForm();
@@ -674,8 +1195,11 @@
     $("#resetBtn").addEventListener("click", () => {
       if (!confirm("全てのデータを削除します。この操作は取り消せません。続行しますか？")) return;
       state = structuredClone(DEFAULT_DATA);
+      state.exercises = structuredClone(SEED_EXERCISES);
+      trainDraft = null;
       saveData();
       fillSettingsForm();
+      fillChartExerciseSelect();
       renderAll();
       toast("全データを削除しました");
     });
@@ -695,7 +1219,8 @@
   // チャート
   // -----------------------------
   let chartRange = 7;
-  let weightChart, calChart, avgWeightChart, avgCalChart;
+  let weightChart, calChart, avgWeightChart, avgCalChart, volumeChart, exWeightChart;
+  let chartExerciseId = null;
 
   function buildSeries(days) {
     const today = new Date();
@@ -748,6 +1273,76 @@
       });
     }
     return result;
+  }
+
+  function buildVolumeSeries(days) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const byDate = {};
+    for (const w of state.workouts) {
+      byDate[w.date] = workoutVolume(w);
+    }
+    const result = [];
+    for (let i = days - 1; i >= 0; i--) {
+      const d = addDays(today, -i);
+      const key = formatDate(d);
+      const vol = byDate[key];
+      result.push({
+        date: key,
+        label: formatChartLabel(d),
+        volume: vol > 0 ? Math.round(vol) : null,
+      });
+    }
+    return result;
+  }
+
+  function buildExerciseWeightSeries(days, exerciseId) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const byDate = {};
+    if (exerciseId) {
+      for (const w of state.workouts) {
+        const entry = (w.entries || []).find((e) => e.exerciseId === exerciseId);
+        if (!entry) continue;
+        const mw = entryMaxWeight(entry);
+        if (mw != null) byDate[w.date] = mw;
+      }
+    }
+    const result = [];
+    for (let i = days - 1; i >= 0; i--) {
+      const d = addDays(today, -i);
+      const key = formatDate(d);
+      result.push({
+        date: key,
+        label: formatChartLabel(d),
+        maxWeight: byDate[key] ?? null,
+      });
+    }
+    return result;
+  }
+
+  function fillChartExerciseSelect() {
+    const sel = $("#chartExerciseSelect");
+    if (!sel) return;
+    const prev = chartExerciseId || sel.value;
+    if (!state.exercises.length) {
+      sel.innerHTML = `<option value="">種目がありません</option>`;
+      chartExerciseId = null;
+      return;
+    }
+    sel.innerHTML = state.exercises
+      .map(
+        (e) =>
+          `<option value="${e.id}">${escapeHtml(e.name)}（${MUSCLE_LABELS[e.muscle] || "その他"}）</option>`
+      )
+      .join("");
+    if (prev && state.exercises.some((e) => e.id === prev)) {
+      sel.value = prev;
+      chartExerciseId = prev;
+    } else {
+      chartExerciseId = state.exercises[0].id;
+      sel.value = chartExerciseId;
+    }
   }
 
   function toggleWeeklyCharts() {
@@ -849,6 +1444,20 @@
         options: opt,
       });
     }
+    if (!volumeChart && $("#volumeChart")) {
+      volumeChart = new Chart($("#volumeChart"), {
+        type: "line",
+        data: { labels: [], datasets: [makeDataset("総ボリューム(kg)", colors.success, colors.successFill)] },
+        options: opt,
+      });
+    }
+    if (!exWeightChart && $("#exWeightChart")) {
+      exWeightChart = new Chart($("#exWeightChart"), {
+        type: "line",
+        data: { labels: [], datasets: [makeDataset("種目重量(kg)", colors.warn, colors.warnFill)] },
+        options: opt,
+      });
+    }
   }
 
   function applyChartTheme(chart, colors, datasetIndex = 0) {
@@ -919,6 +1528,35 @@
       setTrend("#avgWeightTrend", trendBadge(avgSeries.map((s) => s.avgWeight)), "kg");
       setTrend("#avgCalTrend", trendBadge(avgSeries.map((s) => s.avgKcal)), "kcal");
     }
+
+    const volSeries = buildVolumeSeries(chartRange);
+    if (volumeChart) {
+      updateLineChart(
+        volumeChart,
+        volSeries.map((s) => s.label),
+        volSeries.map((s) => s.volume),
+        colors,
+        colors.success,
+        colors.successFill
+      );
+      setTrend("#volumeTrend", trendBadge(volSeries.map((s) => s.volume)), "kg");
+    }
+
+    if (!chartExerciseId && state.exercises.length) {
+      chartExerciseId = state.exercises[0].id;
+    }
+    const exSeries = buildExerciseWeightSeries(chartRange, chartExerciseId);
+    if (exWeightChart) {
+      updateLineChart(
+        exWeightChart,
+        exSeries.map((s) => s.label),
+        exSeries.map((s) => s.maxWeight),
+        colors,
+        colors.warn,
+        warnFill
+      );
+      setTrend("#exWeightTrend", trendBadge(exSeries.map((s) => s.maxWeight)), "kg");
+    }
   }
 
   function setTrend(sel, t, unit) {
@@ -933,6 +1571,7 @@
   function renderAll() {
     renderHome();
     renderRecordView();
+    renderTrainView();
     if ($(".view-graph").classList.contains("active")) updateCharts();
   }
 
@@ -941,9 +1580,28 @@
   // -----------------------------
   function migrateLegacyStorage() {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw || (!raw.includes('"meals"') && !raw.includes('"bodyFat"'))) return;
-    state.records = normalizeRecords(state.records);
-    saveData();
+    if (!raw) return;
+    let dirty = false;
+    if (raw.includes('"meals"') || raw.includes('"bodyFat"')) {
+      state.records = normalizeRecords(state.records);
+      dirty = true;
+    }
+    if (!Array.isArray(state.exercises)) {
+      state.exercises = structuredClone(SEED_EXERCISES);
+      dirty = true;
+    } else if (!state.exercises.length) {
+      state.exercises = structuredClone(SEED_EXERCISES);
+      dirty = true;
+    }
+    if (!Array.isArray(state.workouts)) {
+      state.workouts = [];
+      dirty = true;
+    }
+    // 旧データに exercises/workouts キーが無い場合は永続化
+    if (!raw.includes('"exercises"') || !raw.includes('"workouts"')) {
+      dirty = true;
+    }
+    if (dirty) saveData();
   }
 
   function init() {
@@ -952,7 +1610,9 @@
     attachRipples();
     fillSettingsForm();
     initRecordView();
+    initTrainView();
     initSettingsView();
+    fillChartExerciseSelect();
 
     // ナビゲーション
     $$(".nav-btn").forEach((b) => b.addEventListener("click", () => switchView(b.dataset.target)));
@@ -960,6 +1620,10 @@
     // クイックボタン
     $$(".quick-btn").forEach((b) => {
       b.addEventListener("click", () => {
+        if (b.dataset.quick === "train") {
+          switchView("train");
+          return;
+        }
         switchView("record");
         if (b.dataset.quick === "weight") {
           setTimeout(() => $("#inputWeight").focus(), 200);
@@ -984,6 +1648,14 @@
         updateCharts();
       });
     });
+
+    const chartExSel = $("#chartExerciseSelect");
+    if (chartExSel) {
+      chartExSel.addEventListener("change", () => {
+        chartExerciseId = chartExSel.value || null;
+        updateCharts();
+      });
+    }
 
     renderAll();
   }

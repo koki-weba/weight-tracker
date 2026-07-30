@@ -132,6 +132,18 @@
           </span>
           <span>カロリーを記録</span>
         </button>
+        <button class="quick-btn" data-quick="train">
+          <span class="quick-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M6.5 6.5l11 11"/>
+              <path d="M4 10l2-2 2 2"/>
+              <path d="M16 14l2 2 2-2"/>
+              <path d="M8 4l2 2"/>
+              <path d="M14 18l2 2"/>
+            </svg>
+          </span>
+          <span>筋トレを記録</span>
+        </button>
       </div>
 
       <!-- 今日の概要 -->
@@ -185,6 +197,51 @@
       </div>
     </section>
 
+    <!-- 筋トレ画面 -->
+    <section class="view view-train" data-view="train">
+      <div class="card">
+        <div class="card-head">
+          <h3>日付選択</h3>
+        </div>
+        <input type="date" id="trainDate" class="date-input" />
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h3>この日のトレーニング</h3>
+          <span class="badge" id="trainVolumeBadge">0 kg</span>
+        </div>
+        <div id="trainEntries" class="train-entries"></div>
+        <p class="hint" id="trainEmptyHint">種目を追加してセットを記録しましょう</p>
+        <div class="train-add-row">
+          <label class="field grow">
+            <span>種目を追加</span>
+            <select id="trainAddExercise"></select>
+          </label>
+          <button type="button" class="btn btn-secondary" id="trainAddEntryBtn">追加</button>
+        </div>
+        <button type="button" class="btn btn-primary btn-block" id="saveWorkoutBtn">トレーニングを保存</button>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h3>種目マスタ</h3>
+        </div>
+        <div id="exerciseList" class="exercise-list"></div>
+        <div class="form-row train-ex-form">
+          <label class="field">
+            <span>種目名</span>
+            <input type="text" id="newExerciseName" placeholder="例: ベンチプレス" maxlength="40" />
+          </label>
+          <label class="field">
+            <span>部位</span>
+            <select id="newExerciseMuscle"></select>
+          </label>
+        </div>
+        <button type="button" class="btn btn-secondary btn-block" id="addExerciseBtn">種目を登録</button>
+      </div>
+    </section>
+
     <!-- グラフ画面 -->
     <section class="view view-graph" data-view="graph">
       <div class="segment segment-scroll" id="rangeSegment">
@@ -225,6 +282,26 @@
           <span class="trend" id="avgCalTrend">--</span>
         </div>
         <div class="chart-wrap"><canvas id="avgCalChart"></canvas></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h3>総ボリュームの推移</h3>
+          <span class="trend" id="volumeTrend">--</span>
+        </div>
+        <div class="chart-wrap"><canvas id="volumeChart"></canvas></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h3>種目別重量の推移</h3>
+          <span class="trend" id="exWeightTrend">--</span>
+        </div>
+        <label class="field chart-ex-select">
+          <span>種目</span>
+          <select id="chartExerciseSelect"></select>
+        </label>
+        <div class="chart-wrap"><canvas id="exWeightChart"></canvas></div>
       </div>
 
       <p class="hint chart-weekly-hint" id="weeklyChartHint" hidden>1週間の平均グラフは30日以上の表示で利用できます</p>
@@ -313,6 +390,16 @@
       </svg>
       <span>記録</span>
     </button>
+    <button class="nav-btn" data-target="train">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M6.5 6.5l11 11"/>
+        <path d="M4 10l2-2 2 2"/>
+        <path d="M16 14l2 2 2-2"/>
+        <path d="M8 4l2 2"/>
+        <path d="M14 18l2 2"/>
+      </svg>
+      <span>筋トレ</span>
+    </button>
     <button class="nav-btn" data-target="graph">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M3 3v18h18"/>
@@ -334,7 +421,7 @@
 
   <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-  <script src="app.js?v=8"></script>
+  <script src="app.js?v=10"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(()=>{}));
